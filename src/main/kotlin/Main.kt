@@ -239,14 +239,93 @@ class Individual(private val data: Data,
     fun mutate(mutateProbability: Float = 0.3F) {
         // chance of mutating
         if (Random.nextFloat() < mutateProbability) {
-            when (Random.nextInt(0,2)) {
+            when (Random.nextInt(0,3)) {
                 0 -> swapRoutePatients()
                 1 -> insertMutation()
+                2 -> swapTwoBetweenRoutes()
             }
         }
     }
+    fun movePatientToRoute() {
+        val routes = splitListOnNegative(gene)
+        var route: List<Int>
+        do {
+            route = routes.random()
+        } while (route.isEmpty())
+        routes.remove(route)
 
-    fun swapTwoBetweenRoutes() {
+        var bestFit = Pair(listOf(-1,-1, listOf<Int>()), 0F)
+
+        println("\nRoute1 $route")
+        for (node in route) {
+            //println("Current Node $node")
+            // finds the closest other route to given node
+            var shortest = Pair(-1, Float.MAX_VALUE)
+            val distances = data.travel_times[node+1]
+
+            // Finds the closest node contained in another route
+            for (pos in 1 until distances.size) {
+                if (pos == node+1)
+                    continue
+                // distance is shorter and not in current working route
+                if (distances[pos] < shortest.second && pos-1 !in route)
+                    shortest = Pair(pos-1, distances[pos])
+            }
+
+            // selects the closest route
+            var neighborRoute = listOf<Int>()
+            for (r in routes) {
+                if (shortest.first in r) {
+                    neighborRoute = r
+                    break
+                }
+            }
+
+            if (neighborRoute.isEmpty()) error("Neighbor route is EMPTY")
+            val neighborIndex = neighborRoute.indexOf(shortest.first)
+            bestFit = Pair(listOf(-1,-1, listOf<Int>()), getFitness(10F, neighborRoute))
+
+            println("Neighbor route $neighborRoute")
+            // checks the 2± neighborhood of the best neighboring route node
+            for (i in maxOf(0, neighborIndex-2) .. minOf(neighborIndex+2, neighborRoute.size)) {
+
+                val tempRoute = neighborRoute.toMutableList()
+                tempRoute.add(i, node)
+                val fitness = getFitness(10F, tempRoute)
+                if (fitness < bestFit.second) {
+                    println("New best fitness")
+                    bestFit = Pair(listOf(node, i, neighborRoute), fitness)
+                }
+
+
+            }
+            if (bestFit.first[0] != -1)
+                break
+        }
+        if (bestFit.first[0] != -1) {
+            val (node, index, inRoute) = bestFit.first
+            if (node !is Int) error("node is not an int")
+            if (index !is Int) error("index is not an int")
+            route.toMutableList().remove(node)
+            routes.add(route)
+
+            val newRoute = inRoute as MutableList<Int>
+            routes.remove(newRoute)
+            print("Switched parents. Old fitness:${getFitness(10F, newRoute)}")
+            newRoute.add(index, node)
+            routes.add(newRoute)
+            println(", New fitness:${getFitness(10F, newRoute)}")
+
+        }
+        else {
+            routes.add(route)
+            println("No nodes switched between routes")
+        }
+        concatenateGene(routes)
+
+    }
+
+    private fun swapTwoBetweenRoutes() {
 
         val routes = splitListOnNegative(gene)
         var route: List<Int>
@@ -266,16 +345,15 @@ class Individual(private val data: Data,
             val distances = data.travel_times[node+1]
 
             // Finds the closest node contained in another route
-            for (pos in distances.indices) {
+            for (pos in 1 until distances.size) {
                 if (pos == node+1)
                     continue
-                // distance is smaller and not in current working route
-                if (distances[pos] < shortest.second && pos !in route)
-                    shortest = Pair(pos, distances[pos])
+                // distance is shorter and not in current working route
+                if (distances[pos] < shortest.second && pos-1 !in route)
+                    shortest = Pair(pos-1, distances[pos])
             }
 
             // selects the closest route
-            println(shortest.first)
             var neighborRoute = listOf<Int>()
             for (r in routes) {
                 if (shortest.first in r) {
@@ -336,8 +414,6 @@ class Individual(private val data: Data,
             routes.add(route)
             print("No good switch")
         }
-
-
 
         // route to gene and save it
         concatenateGene(routes)
@@ -566,7 +642,6 @@ class Individual(private val data: Data,
         //gene = split.findDelimiters()
         print("")
     }
-
 
     fun insertionHeuristicSimple(used: List<Int>) {
 
@@ -1107,14 +1182,15 @@ fun main(args: Array<String>) {
     }
 
     model.constructionHeuristic()
+    model.population[0].gene = listOf(19, 23, 24, 26, 28, 29, 27, 25, 22, 21, 20, 74, -1, 66, 64, 62, 61, 73, 71, 60, 63, 67, 65, 68, -2, 4, 2, 6, 7, 9, 10, 8, 5, 3, 1, 0, 46, -3, 42, 41, 40, 39, 58, 43, 45, 44, 47, 50, 49, 51, 48, -4, 89, 86, 85, 82, 81, 83, 84, 87, 88, 90, -5, 12, 16, 17, 18, 14, 15, 13, 11, 98, -6, 97, 95, 94, 93, 91, 92, 96, 99, -7, 31, 32, 30, 34, 36, 37, 38, 35, 33, -8, 56, 54, 53, 52, 55, 57, 59,  -9, 80, 77, 75, 70, 69, 72, 76, 78, 79, -10, -11, -12, -13, -14, -15, -16, -17, -18, -19, -20, -21, -22, -23, -24)
+    repeat(50) {
+        model.population[0].movePatientToRoute()
+    }
 
-    model.population[0].swapTwoBetweenRoutes()
-    model.population[1].swapTwoBetweenRoutes()
-    model.population[2].swapTwoBetweenRoutes()
-    model.population[3].swapTwoBetweenRoutes()
+    //model.population.forEach { it.movePatientToRoute() }
     //val testGene = listOf<Int>(4, 2, 6, 9, 7, 10, 8, 5, 3, 1, -1, 12 ,13 ,14 ,15 ,-2 ,-3)
     //Individual(data, testGene).swapTwoBetweenRoutes()
-    //model.population[0].saveToFile()
+    model.population[0].saveToFile()
 
 
 
