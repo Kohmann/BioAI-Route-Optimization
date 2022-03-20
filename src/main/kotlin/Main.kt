@@ -1,11 +1,12 @@
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
-import smile.clustering.*
 import java.util.Collections
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlin.system.measureTimeMillis
+import sun.misc.Signal
+import sun.misc.SignalHandler
 
 
 @Serializable
@@ -28,7 +29,6 @@ data class Data(val instance_name: String, val nbr_nurses: Int,
 
 fun getResourceAsText(path: String): String? =
         object {}.javaClass.getResource(path)?.readText()
-
 fun createDataclass(filename: String): Data {
     val text = getResourceAsText(filename) ?: error("Could not read file")
     val obj = Json.decodeFromString<Instance>(text)
@@ -37,124 +37,16 @@ fun createDataclass(filename: String): Data {
 }
 
 
-class LinearBoundedSplit(private val data: Data, var graphRep: MutableList<Int>) {
-
-    var graph = graphRep  // graph representation
-
-    var pred: MutableList<MutableList<Int>> = mutableListOf()
-    var potential: MutableList<MutableList<Float>> = mutableListOf()
-
-    val sumDistance: MutableList<Float> = mutableListOf()
-    val sumLoad: MutableList<Int> = mutableListOf()
-
-
-    private fun initData() {
-        for (nurse in 0..data.nbr_nurses ) {
-            val tempDbl = MutableList(graph.size+1){10000000F}
-            val tempInt = MutableList(graph.size+1){0}
-            potential.add(tempDbl)
-            pred.add(tempInt)
-        }
-        potential[0][0] = 0F
-        distanceData()
-    }
-    private fun distanceData() {
-        var travelTime = 0F
-        sumDistance.add(travelTime)
-        for (node in 0 until  (graph.size-1) ) {
-            travelTime += data.travel_times[graph[node]][graph[node+1]]
-            sumDistance.add(travelTime)
-        }
-        travelTime += data.travel_times[0][graph.last()]
-        sumDistance.add(travelTime)
-
-        sumLoad.add(0)
-        for (node in graph) {
-            sumLoad.add(sumLoad.last() + data.patients[node].demand)
-        }
-    }
-
-    fun findDelimiters(): List<Int> {
-        initData()
-        val queue: MutableList<Int> = mutableListOf()
-
-        for (k in 0 until data.nbr_nurses) {
-            queue.clear()
-            queue.add(k)
-
-            for (i in k+1.. graph.size) {
-                potential[k+1][i] = propagate(queue.first(), i, k)
-                pred[k+1][i] = queue.first() //graph[queue.first()] //
-
-                if (i < graph.size) {
-                    if (!dominates(queue.last(), i, k)) {
-                        while (queue.isNotEmpty() && dominatesRight(queue.last(), i, k)) {
-                            queue.removeLast()
-                        }
-                        queue.add(i)
-                    }
-                    while (queue.isNotEmpty() &&
-                            (sumLoad[i+1] - sumLoad[queue.first()]) > (data.capacity_nurse + 0.0001F) ) {
-                        queue.removeFirst()
-                    }
-                }
-
-                if (queue.isEmpty()) { break }
-            }
-        }
-
-        return splitGraphToGene()
-    }
-
-    private fun splitGraphToGene(): List<Int> {
-        var minCost = 1000000F
-        var minIndex: Int = -1
-        for (i in potential.indices) {
-            if (potential[i].last() < minCost) {
-                minCost = potential[i].last()
-                minIndex = i
-            }
-            //println("Cost:${split.potential[i].last() }, minCost:$minCost")
-        }
-        val newGene = graph
-        val newGeneTest = MutableList<Int>(minIndex){0}
-        var cour = data.patients.size
-        for (i in minIndex-1 downTo 0) {
-            //println("i+1: ${i+1}, cour: $cour" + " value: ${pred[i+1][cour]}")
-            cour = pred[i+1][cour]
-            newGeneTest[i] = cour+1
-            newGene.add(cour+1, -1)
-        }
-
-        println("Best k: $minIndex, List:$newGeneTest")
-        return newGene
-    }
-    private fun propagate(i: Int, j: Int, k: Int): Float {
-        return potential[k][i] + sumDistance[j] - sumDistance[i+1] +
-                data.travel_times[0][graph[i]] + data.travel_times[0][graph[j-1]]
-    }
-    private fun dominates(i: Int, j: Int, k: Int): Boolean {
-
-        return sumLoad[i] == sumLoad[j] &&
-                ((potential[k][j] + data.travel_times[0][graph[j]]) >
-                (potential[k][i] + data.travel_times[0][graph[i]] +
-                        sumDistance[j+1] - sumDistance[i+1] - 0.0001F))
-    }
-    private fun dominatesRight(i: Int, j: Int, k: Int): Boolean {
-        return (potential[k][j] + data.travel_times[0][graph[j]]) <
-                (potential[k][i] + data.travel_times[0][graph[i]] +
-                sumDistance[j+1] - sumDistance[i+1] + 0.0001F)
-    }
-
-}
-
-
-
 class Individual(private val data: Data,
+                 private val phiMax: Float = 1F,
                  private val initGene: List<Int>? = null) {
 
+    private val looseMutation = true // feasible but not optimal
     private val numNurses = data.nbr_nurses
     private val numPatients = data.patients.size
+    var phi: Float = if (phiMax == 1F) Random.nextFloat()
+                    else if (phiMax < 1F) phiMax
+                    else Random.nextInt(0, phiMax.toInt()) + Random.nextFloat()
 
 
     var gene: List<Int> = initGene ?: (IntArray(numPatients){ it } + IntArray(numNurses-1){ -(it+1) }).asList().shuffled()
@@ -164,8 +56,8 @@ class Individual(private val data: Data,
         val solution = splitListOnNegative(solutionGene, 1)
         println(solution)
     }
-    fun getFitness(penalty: Float = 0F, route: List<Int> = gene): Float {
-        return getTravelDistance(route) + penalty * getTimeWindowViolation(route) + getCapacityViolation(route)
+    fun getFitness(timePenalty: Float = 0F, route: List<Int> = gene): Float {
+        return getTravelDistance(route) + timePenalty * getTimeWindowViolation(route) + getCapacityViolation(route)
     }
     private fun getTravelDistance(route: List<Int> = gene): Float {
         var travelTime = 0F
@@ -236,17 +128,30 @@ class Individual(private val data: Data,
         return capacitySum
     }
 
-    fun mutate(mutateProbability: Float = 0.3F) {
+    fun mutate(mutateProbability: Float, timePenalty: Float) {
         // chance of mutating
         if (Random.nextFloat() < mutateProbability) {
-            when (Random.nextInt(0,3)) {
-                0 -> swapRoutePatients()
-                1 -> insertMutation()
-                2 -> swapTwoBetweenRoutes()
+            when (Random.nextInt(0,5)) {
+                0 -> swapRoutePatients(timePenalty)
+                1 -> insertMutation(timePenalty)
+                2 -> swapTwoBetweenRoutes(timePenalty)
+                3 -> movePatientToRoute(timePenalty)
+                4 -> splitRoute(timePenalty)
             }
+            mutatePhi()
         }
+
     }
-    fun movePatientToRoute() {
+    private fun mutatePhi() {
+        val randNum = smile.stat.distribution.GaussianDistribution(0.0, (phiMax * 0.1F).toDouble()).rand()
+        val newPhi =  (phi.toDouble() + randNum).toFloat()
+
+        if ( (newPhi >= 0) and (newPhi <= phiMax) ) {
+                phi = newPhi
+        }
+
+    }
+    private fun movePatientToRoute(timePenalty: Float) {
         val routes = splitListOnNegative(gene)
         var route: List<Int>
         do {
@@ -256,9 +161,9 @@ class Individual(private val data: Data,
 
         var bestFit = Pair(listOf(-1,-1, listOf<Int>()), 0F)
 
-        println("\nRoute1 $route")
+        //println("\nRoute1 $route")
         for (node in route) {
-            //println("Current Node $node")
+            //print("   Current Node $node")
             // finds the closest other route to given node
             var shortest = Pair(-1, Float.MAX_VALUE)
             val distances = data.travel_times[node+1]
@@ -281,61 +186,76 @@ class Individual(private val data: Data,
                 }
             }
 
-            if (neighborRoute.isEmpty()) error("Neighbor route is EMPTY")
+            if (neighborRoute.isEmpty()) {
+                //println("${shortest.first} not found in $routes, \n $route")
+                //error("Neighbor route is EMPTY")
+                continue
+            }
             val neighborIndex = neighborRoute.indexOf(shortest.first)
-            bestFit = Pair(listOf(-1,-1, listOf<Int>()), getFitness(10F, neighborRoute))
 
-            println("Neighbor route $neighborRoute")
-            // checks the 2± neighborhood of the best neighboring route node
-            for (i in maxOf(0, neighborIndex-2) .. minOf(neighborIndex+2, neighborRoute.size)) {
+            val combinedFitness = getFitness(timePenalty, route) + getFitness(timePenalty, neighborRoute)
+            bestFit = Pair(listOf(-1,-1, listOf<Int>()), combinedFitness)
 
-                val tempRoute = neighborRoute.toMutableList()
+            var tempRoute = route.toMutableList()
+            tempRoute.remove(node)
+            val fitnessCurrentRoute = getFitness(timePenalty, tempRoute)
+
+            //println("   Neighbor route $neighborRoute, Fitness to beat: $combinedFitness")
+
+            for (i in 0.. neighborRoute.size) {
+
+                tempRoute = neighborRoute.toMutableList()
                 tempRoute.add(i, node)
-                val fitness = getFitness(10F, tempRoute)
-                if (fitness < bestFit.second) {
-                    println("New best fitness")
-                    bestFit = Pair(listOf(node, i, neighborRoute), fitness)
+                //print("\t\t$tempRoute")
+                val fitnessNeighbor = getFitness(timePenalty, tempRoute)
+                val newCombinedFitness = fitnessNeighbor + fitnessCurrentRoute
+                //print(", fitness: $newCombinedFitness")
+                if (newCombinedFitness < bestFit.second) {
+                    //print(",   New best fitness")
+                    bestFit = Pair(listOf(node, i, neighborRoute), newCombinedFitness)
                 }
 
-
             }
-            if (bestFit.first[0] != -1)
+            if (bestFit.first[0] != -1 && looseMutation)
                 break
+
         }
         if (bestFit.first[0] != -1) {
             val (node, index, inRoute) = bestFit.first
             if (node !is Int) error("node is not an int")
             if (index !is Int) error("index is not an int")
-            route.toMutableList().remove(node)
-            routes.add(route)
+            val oldFitness = getFitness(timePenalty, route)
+            val removedNodeRoute = route.toMutableList()
+            removedNodeRoute.remove(node)
+            routes.add(removedNodeRoute)
 
-            val newRoute = inRoute as MutableList<Int>
+            var newRoute = inRoute as MutableList<Int>
+            newRoute = newRoute.toMutableList()
+
             routes.remove(newRoute)
-            print("Switched parents. Old fitness:${getFitness(10F, newRoute)}")
+            //print("Switched parents. Old fitness:${oldFitness + getFitness(10F, newRoute)}")
             newRoute.add(index, node)
             routes.add(newRoute)
-            println(", New fitness:${getFitness(10F, newRoute)}")
+            //println(", New fitness:${getFitness(10F, newRoute)}")
 
         }
         else {
             routes.add(route)
-            println("No nodes switched between routes")
         }
-        concatenateGene(routes)
+        gene = concatenateGene(routes)
+        validGene(gene)
 
     }
-
-    private fun swapTwoBetweenRoutes() {
-
+    private fun swapTwoBetweenRoutes(timePenalty: Float) {
         val routes = splitListOnNegative(gene)
+
         var route: List<Int>
         do {
             route = routes.random()
         } while (route.isEmpty())
         routes.remove(route)
 
-        var bestFit = Pair(listOf(-1,-1, listOf<Int>()), getFitness(10F, route))
-
+        var bestFit = Pair(listOf(-1,-1, listOf<Int>()), getFitness(timePenalty, route))
 
         //println("\nRoute1 $route")
         for (node in route) {
@@ -355,6 +275,8 @@ class Individual(private val data: Data,
 
             // selects the closest route
             var neighborRoute = listOf<Int>()
+
+
             for (r in routes) {
                 if (shortest.first in r) {
                     neighborRoute = r
@@ -362,11 +284,15 @@ class Individual(private val data: Data,
                 }
             }
 
-            if (neighborRoute.isEmpty()) error("Neighbor route is EMPTY")
+            if (neighborRoute.isEmpty()) {
+                //println("${shortest.first} not found in $routes, \n $route")
+                //error("Neighbor route is EMPTY")
+                continue
+            }
 
             //println("Route2 $neighborRoute")
 
-            var bestNeightborFitness = getFitness(10F, neighborRoute)
+            var bestNeighborFitness = getFitness(timePenalty, neighborRoute)
 
             // swap and calculate fitness
             for (neighborNode in neighborRoute) {
@@ -380,46 +306,48 @@ class Individual(private val data: Data,
                 temproute1.add(index1, neighborNode)
                 temproute2.add(index2, node)
 
-                val fitness1 = getFitness(10F, temproute1)
-                val fitness2 = getFitness(10F, temproute2)
+                val fitness1 = getFitness(timePenalty, temproute1)
+                val fitness2 = getFitness(timePenalty, temproute2)
                 // better for route1 and better for route2
-                if (fitness1 < bestFit.second && fitness2 < bestNeightborFitness) {
-                    bestNeightborFitness = fitness2
+                if (fitness1 < bestFit.second && fitness2 < bestNeighborFitness) {
+                    bestNeighborFitness = fitness2
                     bestFit = Pair(listOf(node,neighborNode, neighborRoute), fitness1)
                 }
             }
 
-            if (bestFit.first[0] != -1) {
-                println("Init Route1 fitness ${getFitness(10F, route)}, Route2 fitness: ${getFitness(10F,neighborRoute)}")
-                println("Best fit, Node ${bestFit.first[0]} and ${bestFit.first[1]}")
-            }
+            //if (bestFit.first[0] != -1) {
+            //    //println("Init Route1 fitness ${getFitness(timePenalty, route)}, Route2 fitness: ${getFitness(timePenalty,neighborRoute)}")
+            //    //println("Best fit, Node ${bestFit.first[0]} and ${bestFit.first[1]}")
+            //}
 
         }
 
         if (bestFit.first[0] != -1) {
-            println("\nBest overall: ${bestFit.first[0]} with ${bestFit.first[1]}, fitness ${bestFit.second}")
+            //println("\nBest overall: ${bestFit.first[0]} with ${bestFit.first[1]}, fitness ${bestFit.second}")
 
             val newRoute1 = route.toMutableList()
             val newRoute2 = bestFit.first[2] as MutableList<Int>
             routes.remove(newRoute2)
             val node1 = newRoute1.indexOf(bestFit.first[0])
             val node2 = newRoute2.indexOf(bestFit.first[1])
-            newRoute1[node2] = bestFit.first[0] as Int
-            newRoute2[node1] = bestFit.first[1] as Int
+
+            newRoute1[node1] = bestFit.first[1] as Int
+            newRoute2[node2] = bestFit.first[0] as Int
+
             routes.add(newRoute1)
             routes.add(newRoute2)
 
         }
         else {
             routes.add(route)
-            print("No good switch")
+            //print("No good switch")
         }
-
         // route to gene and save it
-        concatenateGene(routes)
-
+        gene = concatenateGene(routes)
+        validGene(gene)
     }
-    private fun swapRoutePatients() {
+    private fun swapRoutePatients(timePenalty: Float) {
+        // Swap two nodes with each other in a route
         val routes = splitListOnNegative(gene)
 
         var route: List<Int>
@@ -428,96 +356,273 @@ class Individual(private val data: Data,
         } while (route.isEmpty())
         routes.remove(route)
 
-        var reducedRoute = route.toMutableList()
-        var bestFit = Pair(listOf(-1,-1), Float.MAX_VALUE)
+        //var reducedRoute = route.toMutableList()
+        var bestFit = Pair(listOf(-1,-1), getFitness(timePenalty, route))
 
         for (nodePos1 in route.indices) {
             for (nodePos2 in (nodePos1+1) until route.size) {
+                val reducedRoute = route.toMutableList() // back to original
                 Collections.swap(reducedRoute, nodePos1, nodePos2)
-                val fitness = getFitness(10F, reducedRoute) // TODO("Make time penalty available for Individual class")
+                val fitness = getFitness(timePenalty, reducedRoute) // TODO("Make time penalty available for Individual class")
                 if (fitness < bestFit.second)
                     bestFit = Pair(listOf(nodePos1, nodePos2), fitness)
-                reducedRoute = route.toMutableList() // back to original
+
             }
-            //if (bestFit.first[0] != -1)
-            //    println("Best swap, ${bestFit.first[0]} with ${bestFit.first[1]}, fitness ${bestFit.second}")
+            if (bestFit.first[0] != -1 && looseMutation)
+                break
+
         }
-
+        val newRoute = route.toMutableList()
         if (bestFit.first[0] != -1)
-            Collections.swap(reducedRoute, bestFit.first[0], bestFit.first[1])
+            Collections.swap(newRoute, bestFit.first[0], bestFit.first[1])
 
-        if (bestFit.second < getFitness(10F, route))
-            routes.add(reducedRoute)
-        else
-            routes.add(route)
-
-        println("Original route $route, Fitness: ${getFitness(10F, route)}")
-        println("New route      $reducedRoute, Fitness: ${getFitness(10F, reducedRoute)}")
+        routes.add(newRoute)
 
         // route to gene and save it
-        concatenateGene(routes)
+        gene = concatenateGene(routes)
+        validGene(gene)
     }
-    private fun insertMutation() {
-
+    private fun insertMutation(timePenalty: Float) {
+        // positions a node in a better spot within a route
         val routes = splitListOnNegative(gene)
 
+        // choose a random route
         var route: List<Int>
         do {
             route = routes.random()
         } while (route.isEmpty())
         routes.remove(route)
 
-        val reducedRoute = route.toMutableList()
-        for (node in route) {
-            val nodePosition = route.indexOf(node)
+        var bestFit= Pair(route, getFitness(timePenalty, route))
 
+        for (node in route) {
+
+            val reducedRoute = route.toMutableList()
             reducedRoute.remove(node)
-            var bestFit: Pair<Int, Float> = Pair(-1, Float.MAX_VALUE)
 
             for (position in 0 .. reducedRoute.size) {
                 val newRoute = reducedRoute.toMutableList() // make copy of list
                 newRoute.add(position, node)
-                val fitness = getFitness(10F, newRoute)
-                //println(fitness)
+                val fitness = getFitness(timePenalty, newRoute)
+
                 if (fitness < bestFit.second)
-                    bestFit = Pair(position, fitness)
+                    bestFit = Pair(newRoute, fitness)
+            }
+            if (bestFit.first[0] != -1 && looseMutation)
+                break
+
+        }
+        routes.add(bestFit.first)
+        // route to gene and save it
+        gene = concatenateGene(routes)
+        validGene(gene)
+
+    }
+    private fun splitRoute(timePenalty: Float) {
+
+        if (gene.last() < 0) {
+            val unusedVehicle = gene.last()
+
+            val initFitness = 0F
+            var bestSplit = Pair(-1, initFitness)
+            for (i in gene.indices) {
+                val tempGene = gene.toMutableList()
+                tempGene.remove(unusedVehicle)
+
+                tempGene.add(i, unusedVehicle)
+                val fitness = getFitness(timePenalty, tempGene)
+                if (fitness < bestSplit.second)
+                    bestSplit = Pair(i, fitness)
+            }
+            if (bestSplit.first != -1) {
+                val geneCopy = gene.toMutableList()
+                geneCopy.remove(gene.last())
+                geneCopy.add(bestSplit.first, unusedVehicle)
+                gene = geneCopy.toList()
+                //println("Split Route, Old fitness: $initFitness, new Fitness: ${getFitness(10F,gene)}")
+            }
+        }
+        validGene(gene)
+    }
+
+    fun heuristicCrossoverSwap(father: Individual, timeSimilarity: Boolean): Individual {
+        // Heuristic crossover
+        // https://www.sciencedirect.com/science/article/pii/S095418100100005X?via%3Dihub
+
+        val cut = Random.nextInt(0, data.patients.size) //
+
+        val gene1 = gene.toMutableList()
+        val gene2 = father.gene.toMutableList()
+
+        // reorders the genes
+        val tempGene1 = gene1.subList(gene1.indexOf(cut), gene1.size)
+        tempGene1.addAll(gene1.subList(0, gene1.indexOf(cut)))
+        val tempGene2 = gene2.subList(gene2.indexOf(cut), gene2.size)
+        tempGene2.addAll(gene2.subList(0, gene2.indexOf(cut)))
+
+        //println(tempGene1)
+        //println(tempGene2)
+
+        val newGene = mutableListOf<Int>()
+        var chosenNode = cut
+        newGene.add(chosenNode)
+
+        for (i in 0 until gene.size-1) {
+
+            if (chosenNode !in tempGene1 || chosenNode !in tempGene2) {
+                val sortedTest = tempGene1.sorted()
+                sortedTest
+                val sortedTest2 = tempGene2.sorted()
+                sortedTest2
+                chosenNode
+                print("error")
+            }
+
+
+
+            if (tempGene1[i] != chosenNode) {
+                Collections.swap(tempGene1, i, tempGene1.indexOf(chosenNode))
+            }
+            if (tempGene2[i] != chosenNode) {
+                Collections.swap(tempGene2, i, tempGene2.indexOf(chosenNode))
+            }
+
+            val node1 = tempGene1[i]
+            val node2 = tempGene2[i]
+
+            val distNode1: Float
+            val distNode2: Float
+
+            if (timeSimilarity) {
+                distNode1 = timeToNextPatient(tempGene1, node1)
+                distNode2 = timeToNextPatient(tempGene2, node1)
+            }
+            else {
+                distNode1 = distToNextPatient(tempGene1, node1)
+                distNode2 = distToNextPatient(tempGene2, node2)
+            }
+
+            // selects the node with the smallest distance
+            chosenNode = if (distNode1 < distNode2)  tempGene1[i+1] else tempGene2[i+1]
+            newGene.add(chosenNode)
+        }
+        validGene(newGene)
+        return Individual(data, father.phiMax, newGene)
+    }
+    private fun timeToNextPatient(gen: List<Int>, nod: Int):Float {
+        val nextNode = gen[gen.indexOf(nod) + 1]
+        if (nextNode < 0)
+            return data.depot.return_time.toFloat()
+        else
+            return (data.patients[nextNode].end_time - data.patients[nextNode].care_time).toFloat()
+    }
+    private fun distToNextPatient(gen: List<Int>, nod: Int):Float {
+        val dist: Float
+        val nextNode = if (gen.indexOf(nod) != -1) gen.indexOf(nod) + 1 else error("Node not in gene")
+
+        if (nod >= 0) {
+            if (gen[nextNode] >= 0)
+                dist = data.travel_times[nod+1][gen[nextNode] + 1]
+            else
+                dist = data.travel_times[nod+1][0]
+        }
+        else {
+            if (gen[nextNode] >= 0)
+                dist = data.travel_times[0][gen[nextNode] + 1]
+            else
+                dist = 0F
+        }
+
+        return dist
+    }
+
+    fun randomRoute(): List<Int> {
+        // returns a random route
+        val routes = splitListOnNegative(gene)
+        var randRoute = routes.random()
+        while (randRoute.isEmpty()) randRoute = routes.random()
+        return randRoute
+    }
+    fun removeAndInsert(patients: List<Int>): Individual {
+
+        val tempGene = gene.toMutableList()
+        tempGene.removeAll(patients)
+
+        val routes = splitListOnNegative(tempGene)
+
+        // inserts the patients into the best possible feasible position
+        // creates a new route of not possible
+        for (patient in patients) {
+            var insertionCosts = mutableMapOf<List<Int>, Pair<Int, Float>>()
+
+
+            for (route in routes) {
+                if (route.isEmpty()) continue
+
+                // insertion cost in route
+                for (i in 0..route.size) {
+                    val testRoute = route.toMutableList()
+                    val feasibilityError = getTravelDistance(testRoute) + getCapacityViolation(testRoute)
+                    insertionCosts[route] = Pair(i, feasibilityError)
+                }
+            }
+
+            if (Random.nextFloat() <= 0.8F) {
+                var index = -1
+                var bestRoute = mutableListOf<Int>()
+                for (r in insertionCosts.keys) {
+                    val idx = insertionCosts[r]?.first
+                    val cost = insertionCosts[r]?.second
+                    if (cost == 0F) {
+                        index = idx ?: error("idx is null")
+                        bestRoute = r.toMutableList()
+                        break
+                    }
+                }
+                if (index == -1) { // if no feasible
+                    routes.size < data.nbr_nurses
+                    routes.add(listOf(patient))
+                }
+                else {
+                    routes.remove(bestRoute)
+                    bestRoute.add(index, patient)
+                    routes.add(bestRoute)
+                }
+            }
+            else {
+                if (insertionCosts.isNotEmpty()) {
+                    val newRoute = insertionCosts.keys.first().toMutableList()
+                    val index = insertionCosts[newRoute]?.first ?: error("Index is null")
+
+                    routes.remove(newRoute)
+                    newRoute.add(index, patient)
+                    routes.add(newRoute)
+                }
+                else {
+                    if (routes.size < data.nbr_nurses) {
+                        routes.add(listOf(patient))
+                    }
+                    else {
+                        val newRoute = routes[routes.lastIndex].toMutableList()
+                        routes.remove(newRoute)
+                        newRoute.add(patient)
+                        routes.add(newRoute)
+                    }
+
+                }
 
             }
 
-            // if no feasible position: insert node back into original spot
-            if (bestFit.first == -1)
-                reducedRoute.add(nodePosition, node)
-            else
-                reducedRoute.add(bestFit.first, node)
-
         }
-        println("Original route $route, Fitness: ${getFitness(10F, route)}")
-        println("New route      $reducedRoute, Fitness: ${getFitness(10F, reducedRoute)}")
-        routes.add(reducedRoute)
-        // route to gene and save it
-        concatenateGene(routes)
-    }
-    private fun swapMutation() {
-        val point1 = Random.nextInt(0,gene.size)
-        var point2 = Random.nextInt(0,gene.size)
-        while (point1 == point2) point2 = Random.nextInt(0,gene.size)
-        Collections.swap(gene, point1, point2)
-    }
-    private fun inversionMutation() {
-        val point1 = Random.nextInt(0,gene.size)
-        var point2 = Random.nextInt(0,gene.size)
-        while (point1 == point2) point2 = Random.nextInt(0,gene.size)
-        if (point2 < point1)
-            gene.toMutableList().subList(point2,point1).reverse()
-        else
-            gene.toMutableList().subList(point1,point2).reverse()
 
-        gene.toList()
+        val newGene = concatenateGene(routes)
+        validGene(newGene)
+        return Individual(data, phiMax, newGene)
     }
 
-    fun removeCluster() {
+    fun removeCluster(parentPhi: Float, timePenalty: Float): Individual {
         val routes = splitListOnNegative(gene)
-
+        val initalFitness = getFitness(timePenalty)
         // select a random non-empty route
         var selectedRoute: List<Int>
         do {
@@ -526,7 +631,6 @@ class Individual(private val data: Data,
         // remove selected route from list of all routes
         routes.remove(selectedRoute)
 
-
         var longestArc = 0F
         var longestArcIndex = 0
         var previousNode = selectedRoute.first()
@@ -534,10 +638,9 @@ class Individual(private val data: Data,
         // finds the longest arc in route
         for (nextNodeIndex in 1 until selectedRoute.size ) {
             val nextNode = selectedRoute[nextNodeIndex]
-
             val arcDistance = data.travel_times[previousNode + 1][nextNode + 1]
 
-            println("$previousNode to $nextNode, distance $arcDistance")
+            //println("$previousNode to $nextNode, distance $arcDistance")
 
             if (arcDistance > longestArc) {
                 longestArc = arcDistance
@@ -545,17 +648,63 @@ class Individual(private val data: Data,
             }
             previousNode = nextNode
         }
-        println("$selectedRoute, Longest arc Index: $longestArcIndex")
 
-        val shortendRoute = selectedRoute.subList(0, longestArcIndex)
+        //println("$selectedRoute, Longest arc Index: $longestArcIndex")
+
+        val shortenedRoute = selectedRoute.subList(0, longestArcIndex)
         val unassignedNodes = selectedRoute.subList(longestArcIndex, selectedRoute.lastIndex+1)
         // add shortened route back in
-        routes.add(shortendRoute)
+        routes.add(shortenedRoute)
 
-        while (unassignedNodes.isNotEmpty()) {
-
-
+        /*
+        // select empty route, if any
+        var newRoute = mutableListOf<Int>(0)
+        for (r in routes) {
+            if (r.isEmpty())
+                newRoute = r.toMutableList()
         }
+        // no more nurses to use. Do something else, return for now. TODO("Find places to insert unused nodes")
+        if (newRoute.isNotEmpty()) {
+            println("removeClusters; no available nurses")
+            return Individual(data, gene)
+        }
+
+        val unassignedNodesList = unassignedNodes.listIterator()
+        newRoute.add(unassignedNodesList.next())
+
+        while (unassignedNodesList.hasNext()) {
+            var bestFit = Pair(-1, Float.MAX_VALUE)
+            val nextNode = unassignedNodesList.next()
+            for (i in 0 .. newRoute.size) {
+                val tempRoute = newRoute.toMutableList()
+                tempRoute.add(i,nextNode)
+                val fitness = getFitness(10F, tempRoute)
+                if (fitness < bestFit.second)
+                    bestFit = Pair(i, fitness)
+            }
+            newRoute.add(bestFit.first, nextNode)
+        }
+        routes.add(newRoute)
+         */
+        val newGene = concatenateGene(routes).toMutableList()
+
+        for (unassignedNode in unassignedNodes) {
+            var bestFit = Pair(-1, Float.MAX_VALUE)
+            for (i in 0.. newGene.size) {
+
+                val testGene =  newGene.toMutableList()
+                testGene.add(i, unassignedNode)
+                val fitness = getFitness(timePenalty, testGene)
+                if (fitness < bestFit.second)
+                    bestFit = Pair(i, fitness)
+            }
+            newGene.add(bestFit.first, unassignedNode)
+        }
+
+        val newIndividual = Individual(data, phiMax ,newGene)
+        newIndividual.phi = (phi + parentPhi) / 2
+        validGene(newGene)
+        return newIndividual
 
         /*
         val cluster = badRoute.slice(longestDistIdx..badRoute.lastIndex)
@@ -573,7 +722,7 @@ class Individual(private val data: Data,
             }
         }
         var newRoute = mutableListOf<Int>()
-        //println("BEfore loop")
+        //println("Before loop")
         //println(patientIdx)
         //routes.forEach { println(it) }
         for (route in routes) {
@@ -607,40 +756,6 @@ class Individual(private val data: Data,
             println("Error")
 
          */
-
-
-    }
-    /*fun getEdges(): MutableMap<Int, MutableList<Int>> {
-        val edges = mutableMapOf<Int, MutableList<Int>>()
-
-        val graph = mutableListOf<Int>()
-
-        // make graph and store depot indices
-        for (i in gene.indices) {
-            if (gene[i] >= 0) {
-                graph.add(gene[i])
-            }
-            else {
-                splitIndexes.add(i) // indexes of depot
-            }
-        }
-
-        for (pos in graph.indices) {
-            edges[graph[pos]] = when (pos) {
-                0 -> mutableListOf<Int>(graph.last(), graph[1])
-                (graph.size - 1) -> mutableListOf<Int>(graph[pos - 1], graph[1])
-                else -> {
-                    mutableListOf<Int>(graph[pos - 1], graph[pos + 1])
-                }
-            }
-        }
-        return edges
-    }*/
-    fun addDelimiters() {
-        // make graph and store depot indices
-        //val split = LinearBoundedSplit(data, gene as MutableList<Int>)
-        //gene = split.findDelimiters()
-        print("")
     }
 
     fun insertionHeuristicSimple(used: List<Int>) {
@@ -654,15 +769,19 @@ class Individual(private val data: Data,
 
         while (patientList.isNotEmpty() && (usedNurses < (data.nbr_nurses-2) )) {
 
-            var nodePair = patientList.sortedBy { it.second.start_time }.toMutableList().first()
+            val patientListSorted = patientList.sortedBy { it.second.start_time + it.second.care_time }.toMutableList()
+            var nodePair = patientListSorted.first()
 
-            if (firstRun) {
-                var i = 0
+            // assures that the first route is different
+            if (firstRun && used.isNotEmpty()) {
+                var i = 1
                 while (nodePair.first in used) {
-                    nodePair = patientList.sortedBy { it.second.start_time }.toMutableList()[i++]
+                    patientListSorted
+                    nodePair = patientListSorted[i++]
                 }
                 firstRun = false
             }
+
 
             patientList.remove(nodePair)
 
@@ -734,13 +853,13 @@ class Individual(private val data: Data,
         val route = mutableListOf<Int>()
         patientList.forEach { route.add(it.first) }
         initRoutes.add(route)
-        concatenateGene(initRoutes)
+        gene = concatenateGene(initRoutes)
+        validGene(gene)
     }
-    fun insertionHeuristic(used: List<Int>) {
+    fun insertionHeuristic(used: List<Int>, backwards: Boolean = false, randChoise: Boolean = true) {
         // TODO("Fix so that each route does not end on a bad node")
         // patientStartTime = [ (index, patient), ... ], index = patientID aka node number
         val patientList = data.patients.mapIndexed { index: Int, patient -> index to patient  }.toMutableList()
-
 
         var usedNurses = 1
         val initRoutes = mutableListOf<List<Int>>()
@@ -749,15 +868,26 @@ class Individual(private val data: Data,
 
         while (patientList.isNotEmpty() && (usedNurses < (data.nbr_nurses-2) )) {
 
-            var nodePair = patientList.sortedBy { it.second.start_time + it.second.care_time }.toMutableList().first()
+            val patientListSorted = if (backwards)
+                    patientList.sortedBy { it.second.end_time - it.second.care_time }.toMutableList()
+                    else
+                    patientList.sortedBy { it.second.start_time + it.second.care_time }.toMutableList()
 
-            if (firstRun) {
-                var i = 0
+            // reverse the list or not, is random
+            if (Random.nextFloat() > 0.5F)
+                patientListSorted.reverse()
+
+            var nodePair = if (randChoise) patientListSorted.random() else patientListSorted.first()
+
+            // assures that the first route is different
+            if (firstRun && used.isNotEmpty()) {
+                var i = 1
                 while (nodePair.first in used) {
-                    nodePair = patientList.sortedBy { it.second.start_time + it.second.care_time }.toMutableList()[i++]
+                    nodePair = patientListSorted[i++]
                 }
                 firstRun = false
             }
+
 
             patientList.remove(nodePair)
             // init new route
@@ -783,7 +913,10 @@ class Individual(private val data: Data,
                         if (getCapacityViolation(temproute) == 0F && getTimeWindowViolation(temproute) == 0F) { //
 
                             foundNonode = true
-                            val fitness =  getTravelDistance(temproute) + node.second.start_time
+                            val fitness = if (backwards)
+                                    10 * getTravelDistance(temproute) - (node.second.end_time - node.second.care_time)
+                                    else
+                                    10 * getTravelDistance(temproute) + node.second.start_time
                             //println("travelDist: ${getTravelDistance(temproute)}, timePenalty: ${getTimeWindowViolation(temproute)}, Capacaty: ${getCapacityViolation(temproute)} , route $temproute")
                             if (fitness < lowestFitness.second) {
                                 lowestFitness = Pair(node.first, fitness)
@@ -803,15 +936,49 @@ class Individual(private val data: Data,
                 patientList.remove(Pair(lowestFitness.first, bestPatient))
             }
             usedNurses++
+            //if (backwards)
+            //    route.reverse()
             initRoutes.add(route)
         }
         // add remaining un-assigned patients
         val route = mutableListOf<Int>()
         patientList.forEach { route.add(it.first) }
+        //if (backwards)
+        //    route.reverse()
         initRoutes.add(route)
 
-        concatenateGene(initRoutes) // save gene
+        gene = concatenateGene(initRoutes) // save gene
+        validGene(gene)
     }
+    fun insertionHeuristicMultible() {
+
+        val numberOfRoutes = Random.nextInt(1, data.nbr_nurses+1)
+
+        val routes = mutableListOf<MutableList<Int>>()
+        val availablePatients = MutableList(data.patients.size){it}.shuffled().toMutableList()
+        for (i in 0 until numberOfRoutes) {
+            routes.add(mutableListOf(availablePatients.removeAt(0)))
+        }
+
+        while (availablePatients.isNotEmpty()) {
+            for (route in routes){
+                if (availablePatients.isEmpty()) break
+                val prevNode = route.last()
+                // closest node from prevNode
+                var shortestDists = Pair(-1,Float.MAX_VALUE)
+                for (i in availablePatients) {
+                    val dist = data.travel_times[prevNode+1][i+1]
+                    if (dist < shortestDists.second)
+                        shortestDists = Pair(i, dist)
+                }
+                route.add(shortestDists.first)
+                availablePatients.remove(shortestDists.first)
+            }
+        }
+        gene = concatenateGene(routes)
+        validGene(gene)
+    }
+
     private fun splitListOnNegative(arr: List<Int>, onValue: Int = 0): MutableList<List<Int>> {
         // splits on values less than 0
         var startIndex = 0
@@ -826,22 +993,79 @@ class Individual(private val data: Data,
         splitedList.add(arr.subList(startIndex, arrLength))
         return splitedList
     }
-    private fun concatenateGene(routes: List<List<Int>>) {
+    private fun validGene(arr: List<Int>) {
+
+        for (i in 0..99) {
+            if (i !in arr)
+                error("Not a valid gene, Patient problem: ${arr.size}, $arr")
+        }
+        for (i in -1 downTo -24) {
+            if (i !in arr)
+                error("Not a valid gene. Nurse problem: ${arr.size}, $arr")
+        }
+        if (100 in arr)
+            error("Not a valid gene: includes 100, $arr")
+        if (arr.size != 124)
+            error("Not a valid gene, size error: ${arr.size}, $arr")
+
+    }
+    private fun concatenateGene(routes: List<List<Int>>): List<Int> {
         val newGene = mutableListOf<Int>()
 
         var nurse = -1
         for (route in routes) {
             if (route.isNotEmpty()) {
-                route.forEach { newGene.add(it)}
-                newGene.add(nurse--)
+                //route.forEach { newGene.add(it)}
+                newGene.addAll(route)
             }
+            if (-nurse < data.nbr_nurses)
+                newGene.add(nurse--)
         }
-        // adds remaining nurses to gene
+
+        //adds remaining nurses to gene
         val nursesLeft = data.nbr_nurses + nurse
         repeat(nursesLeft) {
+            if (nurse == -data.nbr_nurses) print("GMMM")
             newGene.add(nurse--)
         }
-        gene = newGene
+
+        return newGene
+    }
+
+    fun writeSolution() {
+        val routes = splitListOnNegative(gene)
+        println("\nNurse capacity: ${data.capacity_nurse}")
+        println("Depot return time: ${data.depot.return_time}")
+        var nurseNr = 1
+        for (route in routes) {
+            if (route.isEmpty()) continue
+            print("Nurse %-2d   %-7.2f".format(nurseNr++, getTravelDistance(route)))
+            print("  D(0) -> ")
+
+            var startTime = 0
+            var careTime = 0
+            var travelDist = 0F
+            var prevPatient = -1
+            var endTime = 0F
+            for (patient in route) {
+                travelDist = data.travel_times[prevPatient+1][patient+1]
+                startTime = data.patients[patient].start_time
+                careTime = data.patients[patient].care_time
+                endTime += travelDist
+                if (endTime < startTime)
+                    endTime = startTime.toFloat()
+
+
+                print("%-3d (%-6.2f-%-6.2f)".format(patient+1, endTime, endTime + careTime) +
+                        "[%-4d-%-4d]".format(data.patients[patient].start_time,
+                                    data.patients[patient].end_time))
+                endTime += careTime
+                print(" \t -> ")
+                prevPatient = patient
+            }
+            print("D($endTime) \n")
+        }
+        println("Objective value (total duration): %.2f".format(getTravelDistance(gene)))
     }
 }
 
@@ -853,17 +1077,26 @@ data class GenerationData(var ptype: MutableList<Float> = mutableListOf<Float>()
 
 
 class GeneticAlgorithm(private val data: Data,
-                       private val sizeOfPopulation: Int) {
+                       private val param: GAparameters) {
+
+    private val sizeOfPopulation = param.sizeOfPopulation
+    private val tournamentSize = param.tournamentSize
+    private val mutateProbability = param.mutateProbability
+    private var timePenalty = param.timePenalty
+    private val randomSelection = param.randomSelection
+    private val crowdingSelectionProb = param.crowdingSelectionProb
+    private val crossoverProb = param.crossoverProb
+    private val diversityThreshold = param.diversityThreshold
+    private val useConstructionHeuristic = param.constructionHeurstics
+
 
     var population = mutableListOf<Individual>()
-    private val tournamentSize = 2
-    private val mutateProbability = 0.8F
-    private val timeWindowPenalty = 5F
-    var dataStorage = GenerationData()
+    //var dataStorage = GenerationData()
     lateinit var fittestIndividual: Individual
 
+
     private fun storeCurrentState() {
-        dataStorage.ptype.add(uniquePhenoTypes())
+        //dataStorage.ptype.add(uniquePhenoTypes())
         //dataStorage.meanFitness.add(getAverageFitness())
     }
 
@@ -875,128 +1108,112 @@ class GeneticAlgorithm(private val data: Data,
     }
 
     private fun initPopulation() {
-
-        // repeat(sizeOfPopulation) { population.add(Individual(this.data)) }
-        //kmeansInit()
-        constructionHeuristic()
+        if (useConstructionHeuristic)
+            population.addAll(constructionHeuristic(sizeOfPopulation))
+        else
+            repeat(sizeOfPopulation) { population.add(Individual(this.data, param.phiMax)) }
     }
-    fun kmeansInit() {
-        val xyPosition = getPatientCoords()
-        //val clusters = xmeans(patientPositions, data.nbr_nurses)
-        val xPos = normalizeData(xyPosition[0])
-        val yPos = normalizeData(xyPosition[1])
-        //println("Number of clusters ${clusters.k}")
-        //val kmeansK = kmeans(patientPositions, data.nbr_nurses).k
-        val xyCoords = Array<DoubleArray>(data.patients.size) { doubleArrayOf(0.0) }
-        for (i in xPos.indices)
-            xyCoords[i] = doubleArrayOf(xPos[i], yPos[i])
 
-
-        for (i in 2.. data.nbr_nurses) {
-            val labels = kmeans(data = xyCoords, k = i)
-
-            //println("Kmeans: Number of clusters ${labels.k}")
-            //labels.y.forEach { println(it) }
-
-            val patients = IntArray(data.patients.size) { it }
-            val patientMap = patients.groupBy { labels.y[it] }
-            //println(patientMap)
-            val newGen = mutableListOf<Int>()
-            var nurse = -1
-            for (route in patientMap.values) {
-                route.forEach { newGen.add(it) }
-                newGen.add(nurse--)
-            }
-            population.add(Individual(data, newGen))
+    private fun constructionHeuristic(num: Int): List<Individual> {
+        val pop = mutableListOf<Individual>()
+        repeat(num) {
+            val indiv = Individual(this.data, param.phiMax)
+            indiv.insertionHeuristicMultible()
+            pop.add(indiv)
         }
-        /*
-       val newgene = mutableListOf<Int>()
-       var routenr = -1
-       for (route in patientMap.values)  {
-           println(route)
-           val dist = mutableListOf<Float>()
-           for (i in 1 until  route.size-1) {
-               dist.add(data.travel_times[])
-           }
-           newgene.add(routenr--)
-       }*/
-    }
+        return pop
 
-    fun constructionHeuristic() {
+        /*
         var used = mutableListOf<Int>()
 
-        if (true) {
-            repeat(sizeOfPopulation) {
-                val indiv = Individual(this.data)
-                indiv.insertionHeuristic(used)
-                used.add(indiv.gene[0])
-                population.add(indiv)
-            }
-        }
-        else {
-            used = mutableListOf<Int>()
-            repeat(sizeOfPopulation) {
-                val indiv = Individual(this.data)
-                indiv.insertionHeuristicSimple(used)
-                used.add(indiv.gene[0])
-                population.add(indiv)
-            }
+        var third = (sizeOfPopulation / 3)
+        repeat(third) {
+            val indiv = Individual(this.data, param.phiMax)
+            indiv.insertionHeuristic(used, listOf<Boolean>(true, false).random(), false)
+            used.add(indiv.gene[0])
+            population.add(indiv)
         }
 
-        /*
-        repeat(sizeOfPopulation-15) {
-            population.add(Individual(this.data))
-        }
-        */
+        var adjust = if (third >= 100) 99 else third
 
+        used = mutableListOf<Int>()
+        // if half is odd
+        repeat(adjust) {
+            val indiv = Individual(this.data, param.phiMax)
+            indiv.insertionHeuristicSimple(used)
+            used.add(indiv.gene[0])
+            population.add(indiv)
+        }
+
+        repeat(sizeOfPopulation - third - adjust) {
+            population.add(Individual(this.data, param.phiMax))
+        }
+         */
     }
-
-    private fun normalizeData(data: Array<Double>): List<Double> {
-        val maxValue = data.maxOrNull() ?: error("Must be error in coords")
-        val minValue = data.minOrNull() ?: error("Must be error in coords")
-
-        val normalizedData = mutableListOf<Double>()
-        data.forEach { normalizedData.add((it - minValue)/(maxValue-minValue)) }
-        return normalizedData.toList()
-
-
-    }
-    private fun getPatientCoords(): List<Array<Double>> {
-
-        val xCoord = Array<Double>(data.patients.size){0.0}
-        val yCoord = Array<Double>(data.patients.size){0.0}
-        for (i in data.patients.indices) {
-            xCoord[i] = data.patients[i].x_coord.toDouble()
-            yCoord[i] = data.patients[i].y_coord.toDouble()
-        }
-            //xyCoords[i] = doubleArrayOf(data.patients[i].x_coord.toDouble(), data.patients[i].y_coord.toDouble())
-
-        return listOf(xCoord, yCoord)
-    }
-
     private fun getAverageFitness(): Double {
         val fitness = mutableListOf<Float>()
-        population.forEach { fitness.add(it.getFitness(timeWindowPenalty)) }
+        population.forEach { fitness.add(it.getFitness(timePenalty)) }
         val fittestIndex = fitness.indices.minByOrNull{ fitness[it] } ?: error("This should not run")
         fittestIndividual = population[fittestIndex]
         //dataStorage.fittest.add(population[fittestIndex])
         return fitness.average()
     }
 
-    fun  fit(numGenerations: Int) {
-        this.initPopulation()
-        println("Population of ${population.size} initiated")
+    private fun getNBestIndividuals(num: Int): List<Individual> {
+        val fitness = mutableListOf<Pair<Individual,Float>>()
+        population.forEach { fitness.add( Pair(it, it.getFitness(timePenalty)) ) }
+        val fittestPairs = fitness.sortedBy { it.second }
+        val fittest = mutableListOf<Individual>()
+        for (i in 0 until num)
+            fittest.add(fittestPairs[i].first)
+        return fittest
+    }
 
-        val printNr = if (numGenerations < 30) numGenerations else (numGenerations * 0.01 + 1).roundToInt()
-        for (i in 1..numGenerations) {
-            doGeneration()
+    fun fitMultible(numGenerations: Int, threads: Int = 1) {
+        val bestIndividuals = mutableListOf<Individual>()
 
-            if (i % printNr == 0) {
-                //storeCurrentState()
-                println("Gen: $i, avgFitness: ${getAverageFitness()}, Fittest: ${fittestIndividual.getFitness()}")
-            }
+        repeat(threads) {
+            println("NEW RUN")
+            population.clear()
+            this.initPopulation()
+            fit(numGenerations)
+            bestIndividuals.addAll(getNBestIndividuals((sizeOfPopulation / threads)))
+        }
+        if (threads > 1) {
+            population.clear()
+            population = bestIndividuals
+            println("\nFINAL RUN")
+            fit(100)
         }
 
+    }
+
+    private fun fit(numGenerations: Int)  {
+        //this.initPopulation()
+        println("Population of ${population.size} initiated")
+
+        val printNr = if (numGenerations < 30) 1 else (numGenerations * 0.01 + 1).roundToInt()
+        for (i in 1..numGenerations) {
+            doGeneration()
+            if (i % printNr == 0) {
+                //storeCurrentState()
+                print("Gen: %-3d, avgFitness: %-10.2f   Fittest: %.2f, Diversity: %.3f, phi: %.2f"
+                        .format(i, getAverageFitness(), fittestIndividual.getFitness(timePenalty), uniquePhenoTypes(), fittestIndividual.phi))
+                val feasible = fittestIndividual.getFitness() != fittestIndividual.getFitness(timePenalty)
+                if (feasible) println(", not Feasible") else println()
+
+            }
+
+            if ( i == (numGenerations * 0.8).toInt() ) {
+                println("Super mutating!!")
+                val newpop = superMutation(population).toMutableList()
+                population.clear()
+                population = newpop
+            }
+        }
+        val finalFittest = superMutation(listOf(fittestIndividual)).toMutableList().first()
+        if (finalFittest.getFitness(100F) < fittestIndividual.getFitness(100F))
+            fittestIndividual = finalFittest
     }
 
     private fun doGeneration() {
@@ -1010,9 +1227,19 @@ class GeneticAlgorithm(private val data: Data,
 
         } while (offsprings.size < population.size)
 
+
         val newPopulation = survivorSelection(offsprings.toList())
+
         population.clear()
         population = newPopulation.toMutableList()
+
+        if (uniquePhenoTypes() < diversityThreshold) {
+            //println("Added more diversity")
+            population = nFittest(newPopulation).toMutableList()
+            repeat(30) {
+                population.forEach { it.mutate(1F, timePenalty) }
+            }
+        }
 
     }
 
@@ -1022,29 +1249,29 @@ class GeneticAlgorithm(private val data: Data,
         while (mother == father) {  father = getParent() }
         return arrayOf(mother, father)
     }
-
     private fun getParent(): Individual {
         // TODO("Add more advanced parent selection methods")
-        return tournamentSelection()
+        if (randomSelection)
+            return population.random()
+        else
+            return tournamentSelection()
     }
-
     private fun tournamentSelection(): Individual {
 
         var bestParent = population.random()
         var competingParent = population.random()
         repeat(tournamentSize) {
             while (bestParent == competingParent) { competingParent = population.random() }
-            if (bestParent.getFitness(timeWindowPenalty) > competingParent.getFitness(timeWindowPenalty)) { // minimizing fitness
+            if (bestParent.getFitness(timePenalty) > competingParent.getFitness(timePenalty)) { // minimizing fitness
                 bestParent = competingParent
             }
         }
         return bestParent
     }
-
     private fun getOffspring(mother: Individual, father: Individual): List<Individual> {
         val (firstChild, secondChild) = doCrossover(mother, father)
-        firstChild.mutate(mutateProbability)
-        secondChild.mutate(mutateProbability)
+        firstChild.mutate(mutateProbability, timePenalty)
+        secondChild.mutate(mutateProbability, timePenalty)
         return listOf(firstChild, secondChild)
 
     }
@@ -1052,26 +1279,42 @@ class GeneticAlgorithm(private val data: Data,
     private fun doCrossover(mother: Individual, father: Individual): List<Individual> {
         // TODO("Add more advanced crossover methods")
 
-        //if (Random.nextFloat() < 1) {
-        //    mother.removeCluster()
-        //    father.removeCluster()
-        //    return listOf(mother, father)
-        //}
+        if (Random.nextFloat() > crossoverProb ) {
+            val firstChild = mother.removeCluster(father.phi, timePenalty)
+            val secondChild = father.removeCluster(mother.phi, timePenalty)
+            return listOf(firstChild, secondChild)
+        }
+        else {
+            if (Random.nextFloat() < 0.5F)
+                return heuristicMergeCrossover(mother, father)
+            else
+                return bestCostRouteCrossover(mother, father)
+        }
 
-        val firstChild = alternatingEdgesCrossover(mother, father)
-        val secondChild = alternatingEdgesCrossover(father, mother)
-        return listOf(firstChild, secondChild)
+        //val firstChild = alternatingEdgesCrossover(mother, father)
+        //val secondChild = alternatingEdgesCrossover(father, mother)
+        //return listOf(firstChild, secondChild)
 
     }
+    private fun heuristicMergeCrossover(mother: Individual, father: Individual): List<Individual> {
+        val offspring1 = mother.heuristicCrossoverSwap(father, false)
+        val offspring2 = father.heuristicCrossoverSwap(mother, true)
+        return listOf<Individual>(offspring1, offspring2)
+    }
+    private fun bestCostRouteCrossover(mother: Individual, father: Individual): List<Individual> {
 
-    private fun toGraph(gene: List<Int>): List<Int> {
-        val graph = mutableListOf<Int>()
-        gene.forEach{if (it >= 0) {graph.add(it)} }
-        return graph
+        val patientsMother = mother.randomRoute()
+        val patientsFather = father.randomRoute()
+        val offspring1 = mother.removeAndInsert(patientsFather)
+        val offspring2 = father.removeAndInsert(patientsMother)
+
+        return listOf(offspring1, offspring2)
     }
     private fun alternatingEdgesCrossover(mother: Individual, father: Individual): Individual {
         val motherGene = mother.gene//toGraph(mother.gene)
         val fatherGene = father.gene//toGraph(father.gene)
+
+
         val childGene = mutableListOf<Int>(motherGene[0], motherGene[1])
         val unusedEdges = motherGene.toMutableList()
         unusedEdges.removeAll{ it in childGene }
@@ -1091,107 +1334,148 @@ class GeneticAlgorithm(private val data: Data,
                 arcIdx = if (arcIdx+1 == fatherGene.size) 0 else arcIdx +1
                 nextArc = fatherGene[arcIdx]
             }
-
+            // already in new gene
             if (nextArc in childGene) {
                 nextArc = unusedEdges.random()
             }
             childGene.add(nextArc)
             unusedEdges.remove(nextArc)
-            if (unusedEdges.isEmpty()) {break}
+            if (unusedEdges.isEmpty()) break
         }
+        if (unusedEdges.isNotEmpty())
+            childGene.addAll(unusedEdges)
+
         //val newGene = simpleSplitToRoutes(childGene)
         //val child = Individual(data, childGene)
         //child.addDelimiters() // adds de-limiters (nurses)
 
-        return Individual(data, childGene)
-    }
 
-    private fun simpleSplitToRoutes(graph: List<Int>): List<Int> {
-        var num_vehicle = 0
-        var remained_cap = data.capacity_nurse //- 100
-        val newGene: MutableList<Int> = mutableListOf<Int>()
-        for (node in graph) {
-            if ((remained_cap - data.patients[node].demand) >= 0) {
-                newGene.add(node)
-                remained_cap -= data.patients[node].demand
-            }
-            else {
-                newGene.add( -(num_vehicle+1) )
-                newGene.add(node)
-                num_vehicle += 1
-                remained_cap = data.capacity_nurse - data.patients[node].demand
-            }
-        }
-
-        if ((graph.size + (data.nbr_nurses-1) - newGene.size) != 0) {
-            newGene.addAll(MutableList((graph.size + data.nbr_nurses-1) - newGene.size){ -(it+num_vehicle+1) })
-        }
-
-
-        return newGene
-
-    }
-    private fun oneOrderCrossover(mother: Individual, father: Individual): Individual {
-        // TODO("Do crossover")
-        val rndNumbers = listOf<Int>(Random.nextInt(0, mother.gene.size), Random.nextInt(0, mother.gene.size)).sorted()
-        val firstChild = mother.gene.toMutableList() // simple copy
-
-
-        //firstChild = mother.gene.subList(rndNumbers[0], rndNumbers[1])
-        return Individual(data, firstChild)
+        return Individual(data, (mother.phi + father.phi)/2, childGene)
     }
 
     private fun survivorSelection(offsprings: List<Individual>): List<Individual> {
-        // TODO("Add more complex survivor selection methods")
-        return nFittest(offsprings)
+        // TODO("Add adjustable parameter for survivor selection")
+        if (Random.nextFloat() < crowdingSelectionProb)
+            return generalizedCrowding(offsprings)
+        else
+            return nFittest(offsprings)
     }
-
     private fun nFittest(offsprings: List<Individual>): List<Individual> {
-        // TODO("Add elitism")
+
         val competingPopulation = offsprings + population
 
-        val fitnessList = competingPopulation.associateBy({it.getFitness()}, {it})
-        val fittestIndividuals = fitnessList.toSortedMap().values.toList().subList(0, population.size)
+        val fitnessList = competingPopulation.associateBy({it.getFitness(timePenalty)}, {it})
 
+        val fittestIndividualsList = fitnessList.toSortedMap().values.toList()
+        val numberOfIndividuals = (sizeOfPopulation * 0.4F).toInt()
+        val fittestIndividuals = fittestIndividualsList.subList(0, minOf(numberOfIndividuals, fittestIndividualsList.size)).toMutableList()
 
+        if (useConstructionHeuristic)
+            fittestIndividuals.addAll(constructionHeuristic(sizeOfPopulation - fittestIndividuals.size))
+        else {
+            repeat(sizeOfPopulation - fittestIndividuals.size) {
+                fittestIndividuals.add(Individual(this.data, param.phiMax))
+            }
+        }
+
+        if (Random.nextFloat() < 0.005F) {
+            println("Super mutating!!")
+            return superMutation(fittestIndividuals)
+        }
         return fittestIndividuals
     }
+    private fun superMutation(pop: List<Individual>): List<Individual> {
+        repeat(500) {
+            pop.forEach { it.mutate(1F, timePenalty) }
+        }
+        return pop
+    }
+    private fun generalizedCrowding(offsprings: List<Individual>): List<Individual> {
+        val newGeneration = mutableListOf<Individual>()
+        for ((child, parent) in offsprings zip population) {
+            val F_c = child.getFitness(timePenalty)
+            val F_p = parent.getFitness(timePenalty)
+
+            val p_c_bigger = F_c / (F_c + parent.phi * F_p) // probability for child selection if child fitness is better
+            val p_c_smaller = child.phi * F_c / (child.phi * F_c + F_p) // probability for child selection if parent fitness is better
+            val choice: Individual
+
+
+            if (F_c > F_p) { // child has higher fitness than parent
+                choice = if (Random.nextFloat() <= p_c_bigger)
+                                parent
+                            else
+                                child
+            }
+            else if (F_c == F_p)
+                choice = if (Random.nextFloat() <= 0.5F)
+                            parent
+                        else
+                            child
+            else {
+                choice = if (Random.nextFloat() <= p_c_smaller)
+                    parent
+                else
+                    child
+
+            }
+            newGeneration.add(choice)
+        }
+
+        return newGeneration
+    }
+
+
 }
 
-
-
+data class GAparameters(
+        val sizeOfPopulation: Int = 100, // 100,200, 400 works well
+        val tournamentSize: Int = 4, // 4 works well
+        val mutateProbability: Float = 0.3F, // 0.8G is good
+        val phiMax: Float = 0.8F,
+        val timePenalty: Float = 40F, // 40F is good
+        val randomSelection: Boolean = false,
+        val constructionHeurstics: Boolean = false, // false
+        val crowdingSelectionProb: Float = 1F, // crowding og eliteism
+        val crossoverProb: Float = 0.4F, // 0.1F and 0.6F is good,  removeCluster or crossover heuristics
+        val diversityThreshold: Float = 0.7F // 0.8F
+)
 
 
 fun main(args: Array<String>) {
 
-    val filename = "train_0.json"
+    // Ensures that every run is different
+    smile.math.MathEx.setSeed()
+    val filename = "train_7.json"
     val data = createDataclass(filename)
+    val model = GeneticAlgorithm(data, GAparameters())
 
-    val model = GeneticAlgorithm(data, 4)
+    // prints out the best solution when stopping GA mid-run
+    Signal.handle(Signal("INT"), object : SignalHandler {
+        override fun handle(sig: Signal) {
+            println("\nThe fittest individual: ${model.fittestIndividual.getFitness(0F)}")
+            println("\nThe fittest individual with constraint: ${model.fittestIndividual.getFitness(10F)}")
+            model.fittestIndividual.saveToFile()
+            //model.fittestIndividual.writeSolution()
+            System.exit(0)
+        }
+    })
 
-    val testing = true
+
+    val testing = false
     if (!testing) {
         val timeInMillis = measureTimeMillis {
-            model.fit(10)
+            //model.fit(500)
+            model.fitMultible(180, 3)
         }
 
         println("(The operation took $timeInMillis ms)")
         println("\nThe fittest individual: ${model.fittestIndividual.getFitness(0F)}")
-        println("\nThe fittest individual with constraint: ${model.fittestIndividual.getFitness(1F)}")
+        println("\nThe fittest individual with constraint: ${model.fittestIndividual.getFitness(10F)}")
         model.fittestIndividual.saveToFile()
+
+        //model.fittestIndividual.writeSolution()
     }
-
-    model.constructionHeuristic()
-    model.population[0].gene = listOf(19, 23, 24, 26, 28, 29, 27, 25, 22, 21, 20, 74, -1, 66, 64, 62, 61, 73, 71, 60, 63, 67, 65, 68, -2, 4, 2, 6, 7, 9, 10, 8, 5, 3, 1, 0, 46, -3, 42, 41, 40, 39, 58, 43, 45, 44, 47, 50, 49, 51, 48, -4, 89, 86, 85, 82, 81, 83, 84, 87, 88, 90, -5, 12, 16, 17, 18, 14, 15, 13, 11, 98, -6, 97, 95, 94, 93, 91, 92, 96, 99, -7, 31, 32, 30, 34, 36, 37, 38, 35, 33, -8, 56, 54, 53, 52, 55, 57, 59,  -9, 80, 77, 75, 70, 69, 72, 76, 78, 79, -10, -11, -12, -13, -14, -15, -16, -17, -18, -19, -20, -21, -22, -23, -24)
-    repeat(50) {
-        model.population[0].movePatientToRoute()
-    }
-
-    //model.population.forEach { it.movePatientToRoute() }
-    //val testGene = listOf<Int>(4, 2, 6, 9, 7, 10, 8, 5, 3, 1, -1, 12 ,13 ,14 ,15 ,-2 ,-3)
-    //Individual(data, testGene).swapTwoBetweenRoutes()
-    model.population[0].saveToFile()
-
 
 
 
