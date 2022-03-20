@@ -39,7 +39,7 @@ fun createDataclass(filename: String): Data {
 
 class Individual(private val data: Data,
                  private val phiMax: Float = 1F,
-                 private val initGene: List<Int>? = null) {
+                 initGene: List<Int>? = null) {
 
     private val looseMutation = true // feasible but not optimal
     private val numNurses = data.nbr_nurses
@@ -48,8 +48,8 @@ class Individual(private val data: Data,
                     else if (phiMax < 1F) phiMax
                     else Random.nextInt(0, phiMax.toInt()) + Random.nextFloat()
 
-
     var gene: List<Int> = initGene ?: (IntArray(numPatients){ it } + IntArray(numNurses-1){ -(it+1) }).asList().shuffled()
+
     fun saveToFile() {
         val solutionGene = mutableListOf<Int>()
         gene.forEach { solutionGene.add(it+1) }
@@ -79,7 +79,6 @@ class Individual(private val data: Data,
         return travelTime
     }
     private fun getTimeWindowViolation(route: List<Int> = gene): Float {
-        var travelTime: Float
         var prevLocation = -1
         var timeViolation = 0F
         var usedCareTime = 0F
@@ -101,7 +100,7 @@ class Individual(private val data: Data,
                 // add caring time
                 usedCareTime += data.patients[newLocation].care_time.toFloat()
 
-                // is total time used less then end time
+                // is total time used less than end time
                 timeViolation += max(0F, usedCareTime - data.patients[newLocation].end_time.toFloat())
                 prevLocation = newLocation
             }
@@ -110,20 +109,18 @@ class Individual(private val data: Data,
         return timeViolation + max(0F, timeViolation - data.depot.return_time)
     }
     private fun getCapacityViolation(route: List<Int> = gene): Float {
-        var sumDemamd = 0F
+        var sumDemand = 0F
         var capacitySum = 0F
-        var prevLocation = 0
         for (patient in route) {
             // If route is finished or not
             if (patient < 0) {
-                sumDemamd = 0F
+                sumDemand = 0F
             }
             else {
-                sumDemamd += data.patients[patient].demand
-                if (sumDemamd > data.capacity_nurse)
-                    capacitySum += (sumDemamd - data.capacity_nurse)
+                sumDemand += data.patients[patient].demand
+                if (sumDemand > data.capacity_nurse)
+                    capacitySum += (sumDemand - data.capacity_nurse)
             }
-
         }
         return capacitySum
     }
@@ -191,7 +188,7 @@ class Individual(private val data: Data,
                 //error("Neighbor route is EMPTY")
                 continue
             }
-            val neighborIndex = neighborRoute.indexOf(shortest.first)
+
 
             val combinedFitness = getFitness(timePenalty, route) + getFitness(timePenalty, neighborRoute)
             bestFit = Pair(listOf(-1,-1, listOf<Int>()), combinedFitness)
@@ -224,7 +221,7 @@ class Individual(private val data: Data,
             val (node, index, inRoute) = bestFit.first
             if (node !is Int) error("node is not an int")
             if (index !is Int) error("index is not an int")
-            val oldFitness = getFitness(timePenalty, route)
+
             val removedNodeRoute = route.toMutableList()
             removedNodeRoute.remove(node)
             routes.add(removedNodeRoute)
@@ -233,17 +230,16 @@ class Individual(private val data: Data,
             newRoute = newRoute.toMutableList()
 
             routes.remove(newRoute)
-            //print("Switched parents. Old fitness:${oldFitness + getFitness(10F, newRoute)}")
+
             newRoute.add(index, node)
             routes.add(newRoute)
-            //println(", New fitness:${getFitness(10F, newRoute)}")
 
         }
         else {
             routes.add(route)
         }
         gene = concatenateGene(routes)
-        validGene(gene)
+        //validGene(gene)
 
     }
     private fun swapTwoBetweenRoutes(timePenalty: Float) {
@@ -344,7 +340,7 @@ class Individual(private val data: Data,
         }
         // route to gene and save it
         gene = concatenateGene(routes)
-        validGene(gene)
+        //validGene(gene)
     }
     private fun swapRoutePatients(timePenalty: Float) {
         // Swap two nodes with each other in a route
@@ -380,7 +376,7 @@ class Individual(private val data: Data,
 
         // route to gene and save it
         gene = concatenateGene(routes)
-        validGene(gene)
+        //validGene(gene)
     }
     private fun insertMutation(timePenalty: Float) {
         // positions a node in a better spot within a route
@@ -415,7 +411,7 @@ class Individual(private val data: Data,
         routes.add(bestFit.first)
         // route to gene and save it
         gene = concatenateGene(routes)
-        validGene(gene)
+        //validGene(gene)
 
     }
     private fun splitRoute(timePenalty: Float) {
@@ -442,7 +438,7 @@ class Individual(private val data: Data,
                 //println("Split Route, Old fitness: $initFitness, new Fitness: ${getFitness(10F,gene)}")
             }
         }
-        validGene(gene)
+        //validGene(gene)
     }
 
     fun heuristicCrossoverSwap(father: Individual, timeSimilarity: Boolean): Individual {
@@ -468,16 +464,6 @@ class Individual(private val data: Data,
         newGene.add(chosenNode)
 
         for (i in 0 until gene.size-1) {
-
-            if (chosenNode !in tempGene1 || chosenNode !in tempGene2) {
-                val sortedTest = tempGene1.sorted()
-                sortedTest
-                val sortedTest2 = tempGene2.sorted()
-                sortedTest2
-                chosenNode
-                print("error")
-            }
-
 
 
             if (tempGene1[i] != chosenNode) {
@@ -544,7 +530,8 @@ class Individual(private val data: Data,
         return randRoute
     }
     fun removeAndInsert(patients: List<Int>): Individual {
-
+        // removes all given patients from gene, and reinserts them in anywhere in the gene
+        // where they minimize the fitness the most
         val tempGene = gene.toMutableList()
         tempGene.removeAll(patients)
 
@@ -553,8 +540,7 @@ class Individual(private val data: Data,
         // inserts the patients into the best possible feasible position
         // creates a new route of not possible
         for (patient in patients) {
-            var insertionCosts = mutableMapOf<List<Int>, Pair<Int, Float>>()
-
+            val insertionCosts = mutableMapOf<List<Int>, Pair<Int, Float>>()
 
             for (route in routes) {
                 if (route.isEmpty()) continue
@@ -621,8 +607,9 @@ class Individual(private val data: Data,
     }
 
     fun removeCluster(parentPhi: Float, timePenalty: Float): Individual {
+        // selects a random route and find the patient with the longest arc.
+        // every patient after this arc are unattached and reinserted in the best feasible way
         val routes = splitListOnNegative(gene)
-        val initalFitness = getFitness(timePenalty)
         // select a random non-empty route
         var selectedRoute: List<Int>
         do {
@@ -649,43 +636,11 @@ class Individual(private val data: Data,
             previousNode = nextNode
         }
 
-        //println("$selectedRoute, Longest arc Index: $longestArcIndex")
-
         val shortenedRoute = selectedRoute.subList(0, longestArcIndex)
         val unassignedNodes = selectedRoute.subList(longestArcIndex, selectedRoute.lastIndex+1)
         // add shortened route back in
         routes.add(shortenedRoute)
 
-        /*
-        // select empty route, if any
-        var newRoute = mutableListOf<Int>(0)
-        for (r in routes) {
-            if (r.isEmpty())
-                newRoute = r.toMutableList()
-        }
-        // no more nurses to use. Do something else, return for now. TODO("Find places to insert unused nodes")
-        if (newRoute.isNotEmpty()) {
-            println("removeClusters; no available nurses")
-            return Individual(data, gene)
-        }
-
-        val unassignedNodesList = unassignedNodes.listIterator()
-        newRoute.add(unassignedNodesList.next())
-
-        while (unassignedNodesList.hasNext()) {
-            var bestFit = Pair(-1, Float.MAX_VALUE)
-            val nextNode = unassignedNodesList.next()
-            for (i in 0 .. newRoute.size) {
-                val tempRoute = newRoute.toMutableList()
-                tempRoute.add(i,nextNode)
-                val fitness = getFitness(10F, tempRoute)
-                if (fitness < bestFit.second)
-                    bestFit = Pair(i, fitness)
-            }
-            newRoute.add(bestFit.first, nextNode)
-        }
-        routes.add(newRoute)
-         */
         val newGene = concatenateGene(routes).toMutableList()
 
         for (unassignedNode in unassignedNodes) {
@@ -759,7 +714,8 @@ class Individual(private val data: Data,
     }
 
     fun insertionHeuristicSimple(used: List<Int>) {
-
+        // Greedy construction heristic that selects the closest and has the earliest
+        // start time. If demand exceeds capacity, a new route is created.
         // patientStartTime = [ (index, patient), ... ], index = patientID aka node number
         val patientList = data.patients.mapIndexed { index: Int, patient -> index to patient  }.toMutableList()
 
@@ -776,13 +732,10 @@ class Individual(private val data: Data,
             if (firstRun && used.isNotEmpty()) {
                 var i = 1
                 while (nodePair.first in used) {
-                    patientListSorted
                     nodePair = patientListSorted[i++]
                 }
                 firstRun = false
             }
-
-
             patientList.remove(nodePair)
 
             // init new route
@@ -854,10 +807,11 @@ class Individual(private val data: Data,
         patientList.forEach { route.add(it.first) }
         initRoutes.add(route)
         gene = concatenateGene(initRoutes)
-        validGene(gene)
+        //validGene(gene)
     }
     fun insertionHeuristic(used: List<Int>, backwards: Boolean = false, randChoise: Boolean = true) {
-        // TODO("Fix so that each route does not end on a bad node")
+        // Very greedy construction heuristic that selects the closest node from Depot and always
+        //  adds best patient with respect to distance and time window
         // patientStartTime = [ (index, patient), ... ], index = patientID aka node number
         val patientList = data.patients.mapIndexed { index: Int, patient -> index to patient  }.toMutableList()
 
@@ -948,10 +902,10 @@ class Individual(private val data: Data,
         initRoutes.add(route)
 
         gene = concatenateGene(initRoutes) // save gene
-        validGene(gene)
+        //validGene(gene)
     }
     fun insertionHeuristicMultible() {
-
+        // Selects random patients and adds on the nearest patient in a round-robin fashion
         val numberOfRoutes = Random.nextInt(1, data.nbr_nurses+1)
 
         val routes = mutableListOf<MutableList<Int>>()
@@ -976,11 +930,11 @@ class Individual(private val data: Data,
             }
         }
         gene = concatenateGene(routes)
-        validGene(gene)
+        //validGene(gene)
     }
 
     private fun splitListOnNegative(arr: List<Int>, onValue: Int = 0): MutableList<List<Int>> {
-        // splits on values less than 0
+        // Creates a list of lists (graph) of chromosome representation and returns the graph
         var startIndex = 0
         val splitedList: MutableList<List<Int>> = ArrayList()
         val arrLength = arr.size
@@ -994,7 +948,6 @@ class Individual(private val data: Data,
         return splitedList
     }
     private fun validGene(arr: List<Int>) {
-
         for (i in 0..99) {
             if (i !in arr)
                 error("Not a valid gene, Patient problem: ${arr.size}, $arr")
@@ -1010,6 +963,7 @@ class Individual(private val data: Data,
 
     }
     private fun concatenateGene(routes: List<List<Int>>): List<Int> {
+        // concatenates a sequence of graphs to chromosome with negative values as delimiters
         val newGene = mutableListOf<Int>()
 
         var nurse = -1
@@ -1033,6 +987,7 @@ class Individual(private val data: Data,
     }
 
     fun writeSolution() {
+        // Writes solution to console
         val routes = splitListOnNegative(gene)
         println("\nNurse capacity: ${data.capacity_nurse}")
         println("Depot return time: ${data.depot.return_time}")
@@ -1042,15 +997,13 @@ class Individual(private val data: Data,
             print("Nurse %-2d   %-7.2f".format(nurseNr++, getTravelDistance(route)))
             print("  D(0) -> ")
 
-            var startTime = 0
-            var careTime = 0
-            var travelDist = 0F
+
             var prevPatient = -1
             var endTime = 0F
             for (patient in route) {
-                travelDist = data.travel_times[prevPatient+1][patient+1]
-                startTime = data.patients[patient].start_time
-                careTime = data.patients[patient].care_time
+                val travelDist = data.travel_times[prevPatient+1][patient+1]
+                val startTime = data.patients[patient].start_time
+                val careTime = data.patients[patient].care_time
                 endTime += travelDist
                 if (endTime < startTime)
                     endTime = startTime.toFloat()
@@ -1071,11 +1024,6 @@ class Individual(private val data: Data,
 
 
 
-data class GenerationData(var ptype: MutableList<Float> = mutableListOf<Float>(),
-                          var fittest: MutableList<Individual> = mutableListOf<Individual>(),
-                          var meanFitness: MutableList<Double> = mutableListOf())
-
-
 class GeneticAlgorithm(private val data: Data,
                        private val param: GAparameters) {
 
@@ -1091,14 +1039,7 @@ class GeneticAlgorithm(private val data: Data,
 
 
     var population = mutableListOf<Individual>()
-    //var dataStorage = GenerationData()
     lateinit var fittestIndividual: Individual
-
-
-    private fun storeCurrentState() {
-        //dataStorage.ptype.add(uniquePhenoTypes())
-        //dataStorage.meanFitness.add(getAverageFitness())
-    }
 
     private fun uniquePhenoTypes(): Float {
         val fitness = mutableListOf<Float>()
@@ -1113,7 +1054,6 @@ class GeneticAlgorithm(private val data: Data,
         else
             repeat(sizeOfPopulation) { population.add(Individual(this.data, param.phiMax)) }
     }
-
     private fun constructionHeuristic(num: Int): List<Individual> {
         val pop = mutableListOf<Individual>()
         repeat(num) {
@@ -1150,6 +1090,7 @@ class GeneticAlgorithm(private val data: Data,
         }
          */
     }
+
     private fun getAverageFitness(): Double {
         val fitness = mutableListOf<Float>()
         population.forEach { fitness.add(it.getFitness(timePenalty)) }
@@ -1158,7 +1099,6 @@ class GeneticAlgorithm(private val data: Data,
         //dataStorage.fittest.add(population[fittestIndex])
         return fitness.average()
     }
-
     private fun getNBestIndividuals(num: Int): List<Individual> {
         val fitness = mutableListOf<Pair<Individual,Float>>()
         population.forEach { fitness.add( Pair(it, it.getFitness(timePenalty)) ) }
@@ -1183,11 +1123,10 @@ class GeneticAlgorithm(private val data: Data,
             population.clear()
             population = bestIndividuals
             println("\nFINAL RUN")
-            fit(100)
+            fit(numGenerations/3)
         }
 
     }
-
     private fun fit(numGenerations: Int)  {
         //this.initPopulation()
         println("Population of ${population.size} initiated")
@@ -1215,7 +1154,6 @@ class GeneticAlgorithm(private val data: Data,
         if (finalFittest.getFitness(100F) < fittestIndividual.getFitness(100F))
             fittestIndividual = finalFittest
     }
-
     private fun doGeneration() {
         val offsprings = mutableListOf<Individual>()
 
@@ -1429,7 +1367,7 @@ class GeneticAlgorithm(private val data: Data,
 }
 
 data class GAparameters(
-        val sizeOfPopulation: Int = 100, // 100,200, 400 works well
+        val sizeOfPopulation: Int = 200, // 100,200, 400 works well
         val tournamentSize: Int = 4, // 4 works well
         val mutateProbability: Float = 0.3F, // 0.8G is good
         val phiMax: Float = 0.8F,
@@ -1442,11 +1380,11 @@ data class GAparameters(
 )
 
 
-fun main(args: Array<String>) {
+fun main() {
 
     // Ensures that every run is different
     smile.math.MathEx.setSeed()
-    val filename = "train_7.json"
+    val filename = "train_6.json"
     val data = createDataclass(filename)
     val model = GeneticAlgorithm(data, GAparameters())
 
