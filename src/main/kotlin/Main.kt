@@ -1170,7 +1170,7 @@ class GeneticAlgorithm(private val data: Data,
 
         population.clear()
         population = newPopulation.toMutableList()
-
+        // adds random solution
         if (uniquePhenoTypes() < diversityThreshold) {
             //println("Added more diversity")
             population = nFittest(newPopulation).toMutableList()
@@ -1384,7 +1384,7 @@ fun main() {
 
     // Ensures that every run is different
     smile.math.MathEx.setSeed()
-    val filename = "train_6.json"
+    val filename = "train_9.json"
     val data = createDataclass(filename)
     val model = GeneticAlgorithm(data, GAparameters())
 
@@ -1394,7 +1394,7 @@ fun main() {
             println("\nThe fittest individual: ${model.fittestIndividual.getFitness(0F)}")
             println("\nThe fittest individual with constraint: ${model.fittestIndividual.getFitness(10F)}")
             model.fittestIndividual.saveToFile()
-            //model.fittestIndividual.writeSolution()
+            model.fittestIndividual.writeSolution()
             System.exit(0)
         }
     })
@@ -1412,10 +1412,8 @@ fun main() {
         println("\nThe fittest individual with constraint: ${model.fittestIndividual.getFitness(10F)}")
         model.fittestIndividual.saveToFile()
 
-        //model.fittestIndividual.writeSolution()
+        model.fittestIndividual.writeSolution()
     }
-
-
 
 
 }
