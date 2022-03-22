@@ -1022,7 +1022,6 @@ class Individual(private val data: Data,
 }
 
 
-
 class GeneticAlgorithm(private val data: Data,
                        private val param: GAparameters) {
 
