@@ -18,23 +18,22 @@ data class Patient(val care_time: Int, val demand: Int, val end_time: Int,
 
 @Serializable
 data class Instance(val instance_name: String, val nbr_nurses: Int,
-                    val capacity_nurse: Int, val benchmark: Float,
+                    val capacity_nurse: Int,
                     val depot: Depot, val patients: Map<String, Patient>,
-                    val travel_times: List<List<Float>>)
+                    val travel_times: List<List<Float>>) // val benchmark: Float,
 
 data class Data(val instance_name: String, val nbr_nurses: Int,
-                    val capacity_nurse: Int, val benchmark: Float,
+                    val capacity_nurse: Int,
                     val depot: Depot, val patients: List<Patient>,
-                    val travel_times: List<List<Float>>)
+                    val travel_times: List<List<Float>>) // val benchmark: Float,
 
 fun getResourceAsText(path: String): String? =
         object {}.javaClass.getResource(path)?.readText()
 fun createDataclass(filename: String): Data {
     val text = getResourceAsText(filename) ?: error("Could not read file")
     val obj = Json.decodeFromString<Instance>(text)
-    return Data(obj.instance_name, obj.nbr_nurses, obj.capacity_nurse,
-            obj.benchmark, obj.depot, obj.patients.values.toList(), obj.travel_times)
-}
+    return Data(obj.instance_name, obj.nbr_nurses, obj.capacity_nurse, obj.depot, obj.patients.values.toList(), obj.travel_times)
+} // obj.benchmark,
 
 
 class Individual(private val data: Data,
@@ -1369,14 +1368,14 @@ class GeneticAlgorithm(private val data: Data,
 data class GAparameters(
         val sizeOfPopulation: Int = 200, // 100,200, 400 works well
         val tournamentSize: Int = 4, // 4 works well
-        val mutateProbability: Float = 0.3F, // 0.8G is good
+        val mutateProbability: Float = 0.3F, // 0,3F, 0.8F is good
         val phiMax: Float = 0.8F,
         val timePenalty: Float = 40F, // 40F is good
         val randomSelection: Boolean = false,
         val constructionHeurstics: Boolean = false, // false
         val crowdingSelectionProb: Float = 1F, // crowding og eliteism
         val crossoverProb: Float = 0.4F, // 0.1F and 0.6F is good,  removeCluster or crossover heuristics
-        val diversityThreshold: Float = 0.7F // 0.8F
+        val diversityThreshold: Float = 0.7F // 0.7F
 )
 
 
@@ -1384,7 +1383,7 @@ fun main() {
 
     // Ensures that every run is different
     smile.math.MathEx.setSeed()
-    val filename = "train_9.json"
+    val filename = "test_1.json"
     val data = createDataclass(filename)
     val model = GeneticAlgorithm(data, GAparameters())
 
